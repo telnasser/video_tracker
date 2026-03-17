@@ -29,6 +29,7 @@ export default function VideoAnalysis() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -82,6 +83,7 @@ export default function VideoAnalysis() {
     setIsPaused(false);
     setScanStatus('');
     videoDurationRef.current = 0;
+    setVideoError(null);
     trackerRef.current = new CentroidTracker(10, 120);
   }, [videoUrl]);
 
@@ -378,6 +380,15 @@ export default function VideoAnalysis() {
                   onLoadedMetadata={e => {
                     videoDurationRef.current = (e.currentTarget as HTMLVideoElement).duration;
                   }}
+                  onError={e => {
+                    const v = e.currentTarget as HTMLVideoElement;
+                    const code = v.error?.code ?? 0;
+                    const msgs: Record<number, string> = {
+                      3: 'Video data could not be decoded — convert the file to H.264 MP4 and try again.',
+                      4: 'This video format or codec is not supported by your browser. Convert the file to H.264 MP4 (e.g. via HandBrake or VLC) and try again.',
+                    };
+                    setVideoError(msgs[code] ?? `Video failed to load (error code ${code}).`);
+                  }}
                 />
                 <canvas
                   ref={canvasRef}
@@ -396,6 +407,18 @@ export default function VideoAnalysis() {
                   </div>
                 )}
               </div>
+
+              {/* Video format error */}
+              {videoError && (
+                <div className="flex items-start gap-3 rounded-lg border border-red-500/50 bg-red-950/40 px-4 py-3 font-mono text-xs text-red-400">
+                  <span className="mt-0.5 shrink-0 text-red-500">✕</span>
+                  <div>
+                    <p className="font-semibold text-red-300 mb-1">FORMAT_ERROR</p>
+                    <p>{videoError}</p>
+                    <p className="mt-1 text-red-500/70">Supported formats: MP4 (H.264), WebM (VP8/VP9), OGG</p>
+                  </div>
+                </div>
+              )}
 
               {/* Progress bar */}
               <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
@@ -417,7 +440,7 @@ export default function VideoAnalysis() {
                 {!isAnalyzing ? (
                   <button
                     onClick={analyzeVideo}
-                    disabled={isModelLoading || !!modelError}
+                    disabled={isModelLoading || !!modelError || !!videoError}
                     className="flex items-center gap-2 px-4 py-2 font-mono text-xs font-bold bg-primary/10 text-primary border border-primary/50 rounded hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     <Play className="w-4 h-4" />
