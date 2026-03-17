@@ -31,6 +31,7 @@ export default function VideoAnalysis() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [scanStatus, setScanStatus] = useState<string>('');
   const [currentPersonCount, setCurrentPersonCount] = useState(0);
   const [peakPersonCount, setPeakPersonCount] = useState(0);
   const [totalFramesAnalyzed, setTotalFramesAnalyzed] = useState(0);
@@ -78,6 +79,7 @@ export default function VideoAnalysis() {
     setIsSaved(false);
     setIsAnalyzing(false);
     setIsPaused(false);
+    setScanStatus('');
     trackerRef.current = new CentroidTracker(10, 120);
   }, [videoUrl]);
 
@@ -141,10 +143,18 @@ export default function VideoAnalysis() {
     }
   }, []);
 
-  // Seek the video to a specific time and wait for it to be ready
+  // Seek the video to a specific time and wait for it to be ready (with timeout guard)
   const seekTo = (video: HTMLVideoElement, time: number) =>
     new Promise<void>(resolve => {
-      const onSeeked = () => { video.removeEventListener('seeked', onSeeked); resolve(); };
+      const onSeeked = () => {
+        clearTimeout(timer);
+        video.removeEventListener('seeked', onSeeked);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked);
+        resolve(); // give up waiting and continue
+      }, 3000);
       video.addEventListener('seeked', onSeeked);
       video.currentTime = time;
     });
@@ -152,42 +162,81 @@ export default function VideoAnalysis() {
   const analyzeVideo = useCallback(async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || !detectorRef.current) return;
+    if (!video || !canvas) { setScanStatus('ERROR: Missing video or canvas'); return; }
+    if (!detectorRef.current) { setScanStatus('ERROR: Model not loaded yet'); return; }
 
-    // Mark as running via ref so the loop can check without stale closure issues
     isRunningRef.current = true;
     setIsAnalyzing(true);
     setIsPaused(false);
     setProgress(0);
+    setScanStatus('Waiting for video metadata...');
     setFrameResults([]);
     setSelectedFrame(null);
     setIsSaved(false);
     trackerRef.current = new CentroidTracker(10, 120);
 
-    // Seconds to advance per step (analyze one frame every ~0.2s of video)
+    // Wait for video metadata if not yet available
+    if (!isFinite(video.duration) || video.duration === 0) {
+      await new Promise<void>(resolve => {
+        if (isFinite(video.duration) && video.duration > 0) { resolve(); return; }
+        const onMeta = () => { video.removeEventListener('loadedmetadata', onMeta); resolve(); };
+        video.addEventListener('loadedmetadata', onMeta);
+        setTimeout(resolve, 5000); // hard timeout
+      });
+    }
+
+    // Wait until video has enough data to decode frames
+    if (video.readyState < 2) {
+      setScanStatus('Buffering video...');
+      await new Promise<void>(resolve => {
+        if (video.readyState >= 2) { resolve(); return; }
+        const onData = () => { video.removeEventListener('loadeddata', onData); resolve(); };
+        video.addEventListener('loadeddata', onData);
+        setTimeout(resolve, 5000);
+      });
+    }
+
+    const duration = video.duration;
+    if (!isFinite(duration) || duration === 0) {
+      setScanStatus('ERROR: Cannot read video duration');
+      isRunningRef.current = false;
+      setIsAnalyzing(false);
+      return;
+    }
+
+    // Seconds between sampled frames
     const STEP_SECS = FRAME_SAMPLE_INTERVAL / 30;
 
+    // Jump to beginning — only seek if not already there
+    setScanStatus('Seeking to start...');
+    if (video.currentTime !== 0) {
+      await seekTo(video, 0);
+    }
+
+    let frameTime = 0;
     let frameIndex = 0;
     let localResults: FrameResult[] = [];
     let localPeak = 0;
 
-    // Jump to start and wait
-    await seekTo(video, 0);
+    setScanStatus('Scanning...');
 
-    while (isRunningRef.current) {
-      const duration = video.duration;
-      const currentTime = video.currentTime;
-
-      if (!isFinite(duration) || currentTime >= duration - 0.05) break;
-
-      setProgress((currentTime / duration) * 100);
+    while (isRunningRef.current && frameTime < duration - 0.05) {
+      setProgress((frameTime / duration) * 100);
+      setScanStatus(`Scanning ${frameTime.toFixed(1)}s / ${duration.toFixed(1)}s`);
 
       // Size canvas to match video
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 360;
 
       // Run detection on the current frame
-      const detections = await detectorRef.current.detect(video);
+      let detections: import('@/lib/yolo').DetectionBox[] = [];
+      try {
+        detections = await detectorRef.current.detect(video);
+      } catch (err) {
+        console.error('Detection error at', frameTime, err);
+        setScanStatus(`Detection error at ${frameTime.toFixed(1)}s — skipping`);
+      }
+
       const tracked = trackerRef.current.update(detections);
       const ctx = canvas.getContext('2d');
       if (ctx) drawOverlay(ctx, tracked);
@@ -201,7 +250,6 @@ export default function VideoAnalysis() {
         setPeakPersonCount(count);
       }
 
-      // Capture a thumbnail for frames with people detected
       if (count > 0 && localResults.length < 50) {
         const snap = document.createElement('canvas');
         snap.width = canvas.width;
@@ -209,10 +257,10 @@ export default function VideoAnalysis() {
         const snapCtx = snap.getContext('2d');
         if (snapCtx && ctx) {
           snapCtx.drawImage(video, 0, 0, snap.width, snap.height);
-          snapCtx.drawImage(canvas, 0, 0); // overlay bounding boxes
+          snapCtx.drawImage(canvas, 0, 0);
           localResults.push({
             frameIndex,
-            timestamp: currentTime,
+            timestamp: frameTime,
             personCount: count,
             imageDataUrl: snap.toDataURL('image/jpeg', 0.6),
           });
@@ -221,15 +269,18 @@ export default function VideoAnalysis() {
       }
 
       frameIndex++;
+      frameTime += STEP_SECS;
 
-      const nextTime = currentTime + STEP_SECS;
-      if (nextTime >= duration - 0.05) break;
-      await seekTo(video, nextTime);
+      // Seek to next frame position
+      if (frameTime < duration - 0.05) {
+        await seekTo(video, frameTime);
+      }
     }
 
     isRunningRef.current = false;
     setIsAnalyzing(false);
     setProgress(100);
+    setScanStatus(`Complete — ${frameIndex} frames scanned`);
   }, [drawOverlay]);
 
   const stopAnalysis = useCallback(() => {
@@ -347,6 +398,12 @@ export default function VideoAnalysis() {
                   transition={{ type: 'tween', ease: 'linear', duration: 0.3 }}
                 />
               </div>
+              {/* Scan status message */}
+              {(isAnalyzing || scanStatus) && (
+                <p className="font-mono text-[11px] text-muted-foreground truncate">
+                  {scanStatus || 'Initializing...'}
+                </p>
+              )}
 
               {/* Controls */}
               <div className="flex items-center gap-3">
