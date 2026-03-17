@@ -23,6 +23,7 @@ export default function VideoAnalysis() {
   const detectorRef = useRef<YOLODetector | null>(null);
   const trackerRef = useRef<CentroidTracker>(new CentroidTracker(10, 120));
   const isRunningRef = useRef(false);
+  const videoDurationRef = useRef<number>(0);
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export default function VideoAnalysis() {
     setIsAnalyzing(false);
     setIsPaused(false);
     setScanStatus('');
+    videoDurationRef.current = 0;
     trackerRef.current = new CentroidTracker(10, 120);
   }, [videoUrl]);
 
@@ -175,34 +177,36 @@ export default function VideoAnalysis() {
     setIsSaved(false);
     trackerRef.current = new CentroidTracker(10, 120);
 
-    // Wait for video metadata if not yet available
-    if (!isFinite(video.duration) || video.duration === 0) {
-      await new Promise<void>(resolve => {
-        if (isFinite(video.duration) && video.duration > 0) { resolve(); return; }
-        const onMeta = () => { video.removeEventListener('loadedmetadata', onMeta); resolve(); };
-        video.addEventListener('loadedmetadata', onMeta);
-        setTimeout(resolve, 5000); // hard timeout
-      });
+    // Poll until the React onLoadedMetadata handler has stored a valid duration.
+    // This is more reliable than reading video.duration directly, which can be
+    // NaN if loadedmetadata fires before analyzeVideo is called.
+    const pollStart = Date.now();
+    while (videoDurationRef.current <= 0) {
+      if (video.error) {
+        setScanStatus(`ERROR: Browser cannot decode this video (code ${video.error.code})`);
+        isRunningRef.current = false;
+        setIsAnalyzing(false);
+        return;
+      }
+      if (Date.now() - pollStart > 15000) {
+        setScanStatus('ERROR: Could not read video duration — try a different format');
+        isRunningRef.current = false;
+        setIsAnalyzing(false);
+        return;
+      }
+      setScanStatus(`Loading video metadata... (${((Date.now() - pollStart) / 1000).toFixed(0)}s)`);
+      await new Promise(r => setTimeout(r, 150));
     }
 
-    // Wait until video has enough data to decode frames
-    if (video.readyState < 2) {
+    // Wait until the browser has decoded at least the first frame (readyState >= HAVE_CURRENT_DATA)
+    const bufferStart = Date.now();
+    while (video.readyState < 2) {
       setScanStatus('Buffering video...');
-      await new Promise<void>(resolve => {
-        if (video.readyState >= 2) { resolve(); return; }
-        const onData = () => { video.removeEventListener('loadeddata', onData); resolve(); };
-        video.addEventListener('loadeddata', onData);
-        setTimeout(resolve, 5000);
-      });
+      if (Date.now() - bufferStart > 10000) break;
+      await new Promise(r => setTimeout(r, 150));
     }
 
-    const duration = video.duration;
-    if (!isFinite(duration) || duration === 0) {
-      setScanStatus('ERROR: Cannot read video duration');
-      isRunningRef.current = false;
-      setIsAnalyzing(false);
-      return;
-    }
+    const duration = videoDurationRef.current;
 
     // Seconds between sampled frames
     const STEP_SECS = FRAME_SAMPLE_INTERVAL / 30;
@@ -371,6 +375,9 @@ export default function VideoAnalysis() {
                   playsInline
                   muted
                   preload="auto"
+                  onLoadedMetadata={e => {
+                    videoDurationRef.current = (e.currentTarget as HTMLVideoElement).duration;
+                  }}
                 />
                 <canvas
                   ref={canvasRef}
