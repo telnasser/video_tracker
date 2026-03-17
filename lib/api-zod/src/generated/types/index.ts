@@ -6,4 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./boundingBox";
+export * from "./createDetectionInput";
+export * from "./detection";
+export * from "./detectionStats";
+export * from "./detectionStatsRecentActivityItem";
+export * from "./getDetectionsParams";
 export * from "./healthStatus";

@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Human Motion Tracker"
+version = "1.0.0"
+id = "artifacts/human-tracker"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+localPort = 19328
+name = "web"
+paths = ["/"]
+
+[services.development]
+run = "pnpm --filter @workspace/human-tracker run dev"
+
+[services.env]
+PORT = "19328"
+BASE_PATH = "/"
+
+[services.production]
+build = ["pnpm", "--filter", "@workspace/human-tracker", "run", "build"]
+publicDir = "artifacts/human-tracker/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"

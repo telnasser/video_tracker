@@ -8,3 +8,41 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  trackId: number;
+}
+
+export interface Detection {
+  id: number;
+  timestamp: string;
+  personCount: number;
+  boxes: BoundingBox[];
+}
+
+export interface CreateDetectionInput {
+  personCount: number;
+  boxes: BoundingBox[];
+}
+
+export type DetectionStatsRecentActivityItem = {
+  hour: string;
+  count: number;
+};
+
+export interface DetectionStats {
+  totalDetections: number;
+  totalPersonsDetected: number;
+  averagePersonsPerDetection: number;
+  maxPersonsDetected: number;
+  recentActivity: DetectionStatsRecentActivityItem[];
+}
+
+export type GetDetectionsParams = {
+  limit?: number;
+};

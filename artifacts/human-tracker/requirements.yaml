@@ -1,0 +1,16 @@
+packages:
+  "onnxruntime-web": "Required to run the YOLO model in the browser"
+  "framer-motion": "For fluid UI animations and motion tracking trails"
+  "recharts": "For displaying detection statistics in the history dashboard"
+  "date-fns": "For formatting timestamps"
+  "lucide-react": "For UI icons"
+
+images:
+  - path: "artifacts/human-tracker/public/images/surveillance-bg.png"
+    description: "Dark, moody abstract grid background with a subtle cyan glow, cyberpunk surveillance aesthetic"
+    aspect_ratio: "16:9"
+
+notes:
+  - "Requires onnxruntime-web for browser-based inference."
+  - "Uses a public CDN to fetch the YOLOv8n ONNX model."
+  - "Hooks are imported from @workspace/api-client-react per instructions."

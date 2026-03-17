@@ -1,6 +1,5 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
   description: API specification
@@ -10,6 +9,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: detections
+    description: Human detection tracking
 paths:
   /healthz:
     get:
@@ -24,6 +25,58 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /detections:
+    get:
+      operationId: getDetections
+      tags: [detections]
+      summary: Get detection history
+      description: Returns recent human detection events
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Detection history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Detection"
+    post:
+      operationId: createDetection
+      tags: [detections]
+      summary: Save a detection event
+      description: Records a human detection snapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDetectionInput"
+      responses:
+        "201":
+          description: Detection saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Detection"
+  /detections/stats:
+    get:
+      operationId: getDetectionStats
+      tags: [detections]
+      summary: Get detection statistics
+      description: Returns aggregated statistics about detections
+      responses:
+        "200":
+          description: Detection stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionStats"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +86,85 @@ components:
           type: string
       required:
         - status
-
+    BoundingBox:
+      type: object
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        confidence:
+          type: number
+        trackId:
+          type: integer
+      required:
+        - x
+        - y
+        - width
+        - height
+        - confidence
+        - trackId
+    Detection:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        personCount:
+          type: integer
+        boxes:
+          type: array
+          items:
+            $ref: "#/components/schemas/BoundingBox"
+      required:
+        - id
+        - timestamp
+        - personCount
+        - boxes
+    CreateDetectionInput:
+      type: object
+      properties:
+        personCount:
+          type: integer
+        boxes:
+          type: array
+          items:
+            $ref: "#/components/schemas/BoundingBox"
+      required:
+        - personCount
+        - boxes
+    DetectionStats:
+      type: object
+      properties:
+        totalDetections:
+          type: integer
+        totalPersonsDetected:
+          type: integer
+        averagePersonsPerDetection:
+          type: number
+        maxPersonsDetected:
+          type: integer
+        recentActivity:
+          type: array
+          items:
+            type: object
+            properties:
+              hour:
+                type: string
+              count:
+                type: integer
+            required:
+              - hour
+              - count
+      required:
+        - totalDetections
+        - totalPersonsDetected
+        - averagePersonsPerDetection
+        - maxPersonsDetected
+        - recentActivity

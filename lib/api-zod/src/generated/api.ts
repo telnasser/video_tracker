@@ -14,3 +14,65 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Returns recent human detection events
+ * @summary Get detection history
+ */
+export const getDetectionsQueryLimitDefault = 50;
+
+export const GetDetectionsQueryParams = zod.object({
+  limit: zod.coerce.number().default(getDetectionsQueryLimitDefault),
+});
+
+export const GetDetectionsResponseItem = zod.object({
+  id: zod.number(),
+  timestamp: zod.date(),
+  personCount: zod.number(),
+  boxes: zod.array(
+    zod.object({
+      x: zod.number(),
+      y: zod.number(),
+      width: zod.number(),
+      height: zod.number(),
+      confidence: zod.number(),
+      trackId: zod.number(),
+    }),
+  ),
+});
+export const GetDetectionsResponse = zod.array(GetDetectionsResponseItem);
+
+/**
+ * Records a human detection snapshot
+ * @summary Save a detection event
+ */
+export const CreateDetectionBody = zod.object({
+  personCount: zod.number(),
+  boxes: zod.array(
+    zod.object({
+      x: zod.number(),
+      y: zod.number(),
+      width: zod.number(),
+      height: zod.number(),
+      confidence: zod.number(),
+      trackId: zod.number(),
+    }),
+  ),
+});
+
+/**
+ * Returns aggregated statistics about detections
+ * @summary Get detection statistics
+ */
+export const GetDetectionStatsResponse = zod.object({
+  totalDetections: zod.number(),
+  totalPersonsDetected: zod.number(),
+  averagePersonsPerDetection: zod.number(),
+  maxPersonsDetected: zod.number(),
+  recentActivity: zod.array(
+    zod.object({
+      hour: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+});

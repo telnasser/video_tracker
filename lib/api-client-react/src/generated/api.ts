@@ -5,18 +5,27 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  CreateDetectionInput,
+  Detection,
+  DetectionStats,
+  GetDetectionsParams,
+  HealthStatus,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -92,6 +101,264 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns recent human detection events
+ * @summary Get detection history
+ */
+export const getGetDetectionsUrl = (params?: GetDetectionsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/detections?${stringifiedParams}`
+    : `/api/detections`;
+};
+
+export const getDetections = async (
+  params?: GetDetectionsParams,
+  options?: RequestInit,
+): Promise<Detection[]> => {
+  return customFetch<Detection[]>(getGetDetectionsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDetectionsQueryKey = (params?: GetDetectionsParams) => {
+  return [`/api/detections`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetDetectionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDetections>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetDetectionsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getDetections>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetDetectionsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getDetections>>> = ({
+    signal,
+  }) => getDetections(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDetections>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDetectionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDetections>>
+>;
+export type GetDetectionsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get detection history
+ */
+
+export function useGetDetections<
+  TData = Awaited<ReturnType<typeof getDetections>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetDetectionsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getDetections>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDetectionsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Records a human detection snapshot
+ * @summary Save a detection event
+ */
+export const getCreateDetectionUrl = () => {
+  return `/api/detections`;
+};
+
+export const createDetection = async (
+  createDetectionInput: CreateDetectionInput,
+  options?: RequestInit,
+): Promise<Detection> => {
+  return customFetch<Detection>(getCreateDetectionUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createDetectionInput),
+  });
+};
+
+export const getCreateDetectionMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createDetection>>,
+    TError,
+    { data: BodyType<CreateDetectionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createDetection>>,
+  TError,
+  { data: BodyType<CreateDetectionInput> },
+  TContext
+> => {
+  const mutationKey = ["createDetection"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createDetection>>,
+    { data: BodyType<CreateDetectionInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createDetection(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateDetectionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createDetection>>
+>;
+export type CreateDetectionMutationBody = BodyType<CreateDetectionInput>;
+export type CreateDetectionMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Save a detection event
+ */
+export const useCreateDetection = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createDetection>>,
+    TError,
+    { data: BodyType<CreateDetectionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createDetection>>,
+  TError,
+  { data: BodyType<CreateDetectionInput> },
+  TContext
+> => {
+  return useMutation(getCreateDetectionMutationOptions(options));
+};
+
+/**
+ * Returns aggregated statistics about detections
+ * @summary Get detection statistics
+ */
+export const getGetDetectionStatsUrl = () => {
+  return `/api/detections/stats`;
+};
+
+export const getDetectionStats = async (
+  options?: RequestInit,
+): Promise<DetectionStats> => {
+  return customFetch<DetectionStats>(getGetDetectionStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDetectionStatsQueryKey = () => {
+  return [`/api/detections/stats`] as const;
+};
+
+export const getGetDetectionStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDetectionStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDetectionStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetDetectionStatsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDetectionStats>>
+  > = ({ signal }) => getDetectionStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDetectionStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDetectionStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDetectionStats>>
+>;
+export type GetDetectionStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get detection statistics
+ */
+
+export function useGetDetectionStats<
+  TData = Awaited<ReturnType<typeof getDetectionStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDetectionStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDetectionStatsQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
