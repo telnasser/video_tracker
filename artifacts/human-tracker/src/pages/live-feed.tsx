@@ -73,7 +73,7 @@ export default function LiveFeed() {
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-30">
                 <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
                 <p className="font-mono text-primary animate-pulse tracking-widest">LOADING NEURAL NETWORK...</p>
-                <p className="font-mono text-xs text-muted-foreground mt-2">COCO-SSD MOBILENET_V2</p>
+                <p className="font-mono text-xs text-muted-foreground mt-2">BODY-PIX MOBILENET_V1</p>
               </div>
             )}
 

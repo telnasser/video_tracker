@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, Play, Pause, RotateCcw, Film, Users, Activity, Crosshair, ChevronLeft, ChevronRight } from 'lucide-react';
-import { YOLODetector } from '@/lib/yolo';
+import { BodyPixSegmentor } from '@/lib/segmentation';
 import { CentroidTracker } from '@/lib/tracker';
 import { useCreateDetection } from '@workspace/api-client-react';
 
@@ -20,7 +20,7 @@ export default function VideoAnalysis() {
   const offscreenRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rafRef = useRef<number>();
-  const detectorRef = useRef<YOLODetector | null>(null);
+  const detectorRef = useRef<BodyPixSegmentor | null>(null);
   const trackerRef = useRef<CentroidTracker>(new CentroidTracker(10, 120));
   const isRunningRef = useRef(false);
   const videoDurationRef = useRef<number>(0);
@@ -51,7 +51,7 @@ export default function VideoAnalysis() {
     setIsModelLoading(true);
     setModelError(null);
     try {
-      const detector = new YOLODetector({ confThreshold: 0.45 });
+      const detector = new BodyPixSegmentor();
       await detector.load();
       detectorRef.current = detector;
     } catch (err) {
@@ -130,53 +130,6 @@ export default function VideoAnalysis() {
     if (file) handleFile(file);
   };
 
-  const drawOverlay = useCallback((
-    ctx: CanvasRenderingContext2D,
-    trackedObjects: ReturnType<CentroidTracker['update']>
-  ) => {
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    for (const obj of trackedObjects) {
-      if (obj.missedFrames > 0) continue;
-      const { x, y, width, height, confidence, trackId } = obj.box;
-      const color = obj.color;
-
-      // Trail
-      if (obj.history.length > 1) {
-        ctx.beginPath();
-        ctx.strokeStyle = `${color}66`;
-        ctx.lineWidth = 2;
-        ctx.moveTo(obj.history[0].x, obj.history[0].y);
-        for (let i = 1; i < obj.history.length; i++) {
-          ctx.lineTo(obj.history[i].x, obj.history[i].y);
-        }
-        ctx.stroke();
-      }
-
-      // Box
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, width, height);
-
-      // Corner accents
-      const cl = 12;
-      ctx.lineWidth = 3;
-      [[x, y, x + cl, y, x, y + cl], [x + width - cl, y, x + width, y, x + width, y + cl],
-       [x, y + height - cl, x, y + height, x + cl, y + height],
-       [x + width - cl, y + height, x + width, y + height, x + width, y + height - cl]]
-        .forEach(([ax, ay, bx, by, cx2, cy]) => {
-          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx2, cy); ctx.stroke();
-        });
-
-      // Label
-      const label = `ID:${trackId}  ${(confidence * 100).toFixed(0)}%`;
-      ctx.font = 'bold 12px monospace';
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y - 18, tw + 8, 18);
-      ctx.fillStyle = '#000';
-      ctx.fillText(label, x + 4, y - 4);
-    }
-  }, []);
 
   // Seek the video to a specific time and wait for it to be ready (with timeout guard)
   const seekTo = (video: HTMLVideoElement, time: number) =>
@@ -265,18 +218,20 @@ export default function VideoAnalysis() {
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 360;
 
-      // Run detection on the current frame
-      let detections: import('@/lib/yolo').DetectionBox[] = [];
+      // Run segmentation on the current frame
+      let segs: Awaited<ReturnType<BodyPixSegmentor['segment']>> = [];
+      let segResults: ReturnType<BodyPixSegmentor['extractBoxesWithIndex']> = [];
       try {
-        detections = await detectorRef.current.detect(video);
+        segs = await detectorRef.current.segment(video);
+        segResults = detectorRef.current.extractBoxesWithIndex(segs);
       } catch (err) {
-        console.error('Detection error at', frameTime, err);
+        console.error('Segmentation error at', frameTime, err);
         setScanStatus(`Detection error at ${frameTime.toFixed(1)}s — skipping`);
       }
 
-      const tracked = trackerRef.current.update(detections);
+      const tracked = trackerRef.current.update(segResults.map(r => r.box));
       const ctx = canvas.getContext('2d');
-      if (ctx) drawOverlay(ctx, tracked);
+      if (ctx) detectorRef.current.drawSegmentedOverlay(ctx, segs, segResults, tracked);
 
       const count = tracked.filter(o => o.missedFrames === 0).length;
       setCurrentPersonCount(count);
@@ -318,7 +273,7 @@ export default function VideoAnalysis() {
     setIsAnalyzing(false);
     setProgress(100);
     setScanStatus(`Complete — ${frameIndex} frames scanned`);
-  }, [drawOverlay]);
+  }, []);
 
   const stopAnalysis = useCallback(() => {
     isRunningRef.current = false;
