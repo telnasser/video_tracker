@@ -30,6 +30,8 @@ export default function VideoAnalysis() {
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [isTranscoding, setIsTranscoding] = useState(false);
+  const [transcodeProgress, setTranscodeProgress] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -86,6 +88,35 @@ export default function VideoAnalysis() {
     setVideoError(null);
     trackerRef.current = new CentroidTracker(10, 120);
   }, [videoUrl]);
+
+  const transcodeVideo = useCallback(async () => {
+    if (!videoFile) return;
+    setIsTranscoding(true);
+    setTranscodeProgress('Uploading to server...');
+    setVideoError(null);
+    try {
+      const form = new FormData();
+      form.append('video', videoFile);
+      setTranscodeProgress('Transcoding to H.264 MP4 (this may take a minute)...');
+      const resp = await fetch('/api/transcode', { method: 'POST', body: form });
+      if (!resp.ok) {
+        const msg = await resp.text();
+        throw new Error(msg || `Server error ${resp.status}`);
+      }
+      const blob = await resp.blob();
+      const newUrl = URL.createObjectURL(blob);
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
+      videoDurationRef.current = 0;
+      setVideoUrl(newUrl);
+      setTranscodeProgress('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setVideoError(`Transcoding failed: ${msg}`);
+      setTranscodeProgress('');
+    } finally {
+      setIsTranscoding(false);
+    }
+  }, [videoFile, videoUrl]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -408,15 +439,35 @@ export default function VideoAnalysis() {
                 )}
               </div>
 
-              {/* Video format error */}
+              {/* Video format error + auto-convert option */}
               {videoError && (
                 <div className="flex items-start gap-3 rounded-lg border border-red-500/50 bg-red-950/40 px-4 py-3 font-mono text-xs text-red-400">
                   <span className="mt-0.5 shrink-0 text-red-500">✕</span>
-                  <div>
+                  <div className="flex-1">
                     <p className="font-semibold text-red-300 mb-1">FORMAT_ERROR</p>
                     <p>{videoError}</p>
-                    <p className="mt-1 text-red-500/70">Supported formats: MP4 (H.264), WebM (VP8/VP9), OGG</p>
+                    <p className="mt-1 text-red-500/70">Supported: MP4 (H.264), WebM, OGG</p>
+                    {!videoError.startsWith('Transcoding') && (
+                      <button
+                        onClick={transcodeVideo}
+                        disabled={isTranscoding}
+                        className="mt-3 flex items-center gap-2 px-3 py-1.5 bg-primary/10 border border-primary/50 text-primary rounded hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {isTranscoding
+                          ? <><span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" /> CONVERTING...</>
+                          : <><RotateCcw className="w-3 h-3" /> AUTO-CONVERT TO H.264</>
+                        }
+                      </button>
+                    )}
                   </div>
+                </div>
+              )}
+
+              {/* Transcoding progress (while converting, before error clears) */}
+              {isTranscoding && transcodeProgress && (
+                <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2 font-mono text-xs text-primary">
+                  <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin shrink-0" />
+                  {transcodeProgress}
                 </div>
               )}
 
@@ -440,7 +491,7 @@ export default function VideoAnalysis() {
                 {!isAnalyzing ? (
                   <button
                     onClick={analyzeVideo}
-                    disabled={isModelLoading || !!modelError || !!videoError}
+                    disabled={isModelLoading || !!modelError || !!videoError || isTranscoding}
                     className="flex items-center gap-2 px-4 py-2 font-mono text-xs font-bold bg-primary/10 text-primary border border-primary/50 rounded hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     <Play className="w-4 h-4" />
