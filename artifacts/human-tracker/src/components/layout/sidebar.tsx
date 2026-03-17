@@ -1,11 +1,12 @@
 import { Link, useLocation } from 'wouter';
-import { Activity, History, Settings, ShieldAlert, Cpu } from 'lucide-react';
+import { Activity, History, ShieldAlert, Cpu, Film } from 'lucide-react';
 
 export function Sidebar() {
   const [location] = useLocation();
 
   const links = [
     { href: '/', label: 'Live Monitor', icon: Activity },
+    { href: '/video', label: 'Video Analysis', icon: Film },
     { href: '/history', label: 'History Logs', icon: History },
   ];
 

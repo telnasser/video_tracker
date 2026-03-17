@@ -6,6 +6,7 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout";
 import LiveFeed from "@/pages/live-feed";
 import History from "@/pages/history";
+import VideoAnalysis from "@/pages/video-analysis";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,6 +22,7 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/" component={LiveFeed} />
+        <Route path="/video" component={VideoAnalysis} />
         <Route path="/history" component={History} />
         <Route component={NotFound} />
       </Switch>
