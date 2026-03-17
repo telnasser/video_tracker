@@ -22,6 +22,7 @@ export default function VideoAnalysis() {
   const rafRef = useRef<number>();
   const detectorRef = useRef<YOLODetector | null>(null);
   const trackerRef = useRef<CentroidTracker>(new CentroidTracker(10, 120));
+  const isRunningRef = useRef(false);
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -140,11 +141,21 @@ export default function VideoAnalysis() {
     }
   }, []);
 
+  // Seek the video to a specific time and wait for it to be ready
+  const seekTo = (video: HTMLVideoElement, time: number) =>
+    new Promise<void>(resolve => {
+      const onSeeked = () => { video.removeEventListener('seeked', onSeeked); resolve(); };
+      video.addEventListener('seeked', onSeeked);
+      video.currentTime = time;
+    });
+
   const analyzeVideo = useCallback(async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || !detectorRef.current) return;
 
+    // Mark as running via ref so the loop can check without stale closure issues
+    isRunningRef.current = true;
     setIsAnalyzing(true);
     setIsPaused(false);
     setProgress(0);
@@ -153,91 +164,76 @@ export default function VideoAnalysis() {
     setIsSaved(false);
     trackerRef.current = new CentroidTracker(10, 120);
 
+    // Seconds to advance per step (analyze one frame every ~0.2s of video)
+    const STEP_SECS = FRAME_SAMPLE_INTERVAL / 30;
+
     let frameIndex = 0;
     let localResults: FrameResult[] = [];
     let localPeak = 0;
 
-    const processNextFrame = () => {
-      if (!video || !canvas || !detectorRef.current) return;
+    // Jump to start and wait
+    await seekTo(video, 0);
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
+    while (isRunningRef.current) {
       const duration = video.duration;
       const currentTime = video.currentTime;
-      const prog = duration > 0 ? (currentTime / duration) * 100 : 0;
-      setProgress(prog);
 
-      if (currentTime >= duration - 0.05) {
-        // Done
-        setIsAnalyzing(false);
-        setProgress(100);
-        return;
+      if (!isFinite(duration) || currentTime >= duration - 0.05) break;
+
+      setProgress((currentTime / duration) * 100);
+
+      // Size canvas to match video
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 360;
+
+      // Run detection on the current frame
+      const detections = await detectorRef.current.detect(video);
+      const tracked = trackerRef.current.update(detections);
+      const ctx = canvas.getContext('2d');
+      if (ctx) drawOverlay(ctx, tracked);
+
+      const count = tracked.filter(o => o.missedFrames === 0).length;
+      setCurrentPersonCount(count);
+      setTotalFramesAnalyzed(f => f + 1);
+
+      if (count > localPeak) {
+        localPeak = count;
+        setPeakPersonCount(count);
       }
 
-      // Only analyze every Nth frame
-      if (frameIndex % FRAME_SAMPLE_INTERVAL === 0) {
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 360;
-
-        detectorRef.current.detect(video).then(detections => {
-          const tracked = trackerRef.current.update(detections);
-          const visible = tracked.filter(o => o.missedFrames === 0);
-          const count = visible.length;
-
-          if (ctx) drawOverlay(ctx, tracked);
-
-          setCurrentPersonCount(count);
-          setTotalFramesAnalyzed(f => f + 1);
-
-          if (count > localPeak) {
-            localPeak = count;
-            setPeakPersonCount(count);
-          }
-
-          // Capture frame snapshot if people detected
-          if (count > 0 && localResults.length < 50) {
-            const snap = document.createElement('canvas');
-            snap.width = canvas.width;
-            snap.height = canvas.height;
-            const snapCtx = snap.getContext('2d');
-            if (snapCtx) {
-              snapCtx.drawImage(video, 0, 0, snap.width, snap.height);
-              drawOverlay(snapCtx, tracked);
-              localResults.push({
-                frameIndex,
-                timestamp: currentTime,
-                personCount: count,
-                imageDataUrl: snap.toDataURL('image/jpeg', 0.6),
-              });
-              setFrameResults([...localResults]);
-            }
-          }
-        }).catch(console.error);
+      // Capture a thumbnail for frames with people detected
+      if (count > 0 && localResults.length < 50) {
+        const snap = document.createElement('canvas');
+        snap.width = canvas.width;
+        snap.height = canvas.height;
+        const snapCtx = snap.getContext('2d');
+        if (snapCtx && ctx) {
+          snapCtx.drawImage(video, 0, 0, snap.width, snap.height);
+          snapCtx.drawImage(canvas, 0, 0); // overlay bounding boxes
+          localResults.push({
+            frameIndex,
+            timestamp: currentTime,
+            personCount: count,
+            imageDataUrl: snap.toDataURL('image/jpeg', 0.6),
+          });
+          setFrameResults([...localResults]);
+        }
       }
 
       frameIndex++;
-      // Advance video
-      video.currentTime = Math.min(currentTime + (1 / 30), duration);
-    };
 
-    // Use seeked event to step through video
-    const onSeeked = () => {
-      if (!isAnalyzing) return;
-      processNextFrame();
-    };
+      const nextTime = currentTime + STEP_SECS;
+      if (nextTime >= duration - 0.05) break;
+      await seekTo(video, nextTime);
+    }
 
-    video.addEventListener('seeked', onSeeked);
-
-    // Start
-    video.currentTime = 0;
-
-    return () => {
-      video.removeEventListener('seeked', onSeeked);
-    };
+    isRunningRef.current = false;
+    setIsAnalyzing(false);
+    setProgress(100);
   }, [drawOverlay]);
 
   const stopAnalysis = useCallback(() => {
+    isRunningRef.current = false;
     setIsAnalyzing(false);
     setIsPaused(false);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
