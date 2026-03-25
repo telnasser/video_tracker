@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { BodyPixSegmentor } from '@/lib/segmentation';
+import { DETRDetector } from '@/lib/detr-detector';
 import { CentroidTracker, BoundingBox } from '@/lib/tracker';
 import { useCreateDetection } from '@workspace/api-client-react';
 
@@ -15,7 +15,7 @@ export function useLiveDetection() {
   const [isActive, setIsActive] = useState(false);
   const [currentStats, setCurrentStats] = useState({ fps: 0, personCount: 0 });
 
-  const segmentorRef = useRef<BodyPixSegmentor | null>(null);
+  const segmentorRef = useRef<DETRDetector | null>(null);
   const trackerRef = useRef<CentroidTracker>(new CentroidTracker(20, 100));
   const reqRef = useRef<number>();
   const lastLogTimeRef = useRef<number>(0);
@@ -48,7 +48,7 @@ export function useLiveDetection() {
   const initModel = async () => {
     try {
       setIsModelLoading(true);
-      const seg = new BodyPixSegmentor();
+      const seg = new DETRDetector();
       await seg.load();
       segmentorRef.current = seg;
       setIsModelLoading(false);

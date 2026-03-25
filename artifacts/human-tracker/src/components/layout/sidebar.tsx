@@ -60,11 +60,11 @@ export function Sidebar() {
             </div>
             <div className="flex justify-between">
               <span>MODEL</span>
-              <span>BODY-PIX</span>
+              <span>DETR</span>
             </div>
             <div className="flex justify-between">
               <span>RUNTIME</span>
-              <span>TENSORFLOW.JS</span>
+              <span>ONNX RUNTIME</span>
             </div>
           </div>
         </div>

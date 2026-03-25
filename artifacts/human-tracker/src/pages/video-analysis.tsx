@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, Play, Pause, RotateCcw, Film, Users, Activity, Crosshair, ChevronLeft, ChevronRight } from 'lucide-react';
-import { BodyPixSegmentor } from '@/lib/segmentation';
+import { DETRDetector } from '@/lib/detr-detector';
 import { CentroidTracker } from '@/lib/tracker';
 import { useCreateDetection } from '@workspace/api-client-react';
 
@@ -20,7 +20,7 @@ export default function VideoAnalysis() {
   const offscreenRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rafRef = useRef<number>();
-  const detectorRef = useRef<BodyPixSegmentor | null>(null);
+  const detectorRef = useRef<DETRDetector | null>(null);
   const trackerRef = useRef<CentroidTracker>(new CentroidTracker(10, 120));
   const isRunningRef = useRef(false);
   const videoDurationRef = useRef<number>(0);
@@ -51,7 +51,7 @@ export default function VideoAnalysis() {
     setIsModelLoading(true);
     setModelError(null);
     try {
-      const detector = new BodyPixSegmentor();
+      const detector = new DETRDetector();
       await detector.load();
       detectorRef.current = detector;
     } catch (err) {
@@ -219,8 +219,8 @@ export default function VideoAnalysis() {
       canvas.height = video.videoHeight || 360;
 
       // Run segmentation on the current frame
-      let segs: Awaited<ReturnType<BodyPixSegmentor['segment']>> = [];
-      let segResults: ReturnType<BodyPixSegmentor['extractBoxesWithIndex']> = [];
+      let segs: Awaited<ReturnType<DETRDetector['segment']>> = [];
+      let segResults: ReturnType<DETRDetector['extractBoxesWithIndex']> = [];
       try {
         segs = await detectorRef.current.segment(video);
         segResults = detectorRef.current.extractBoxesWithIndex(segs);
