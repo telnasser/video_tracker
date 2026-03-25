@@ -1,40 +1,41 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { DETRDetector } from '@/lib/detr-detector';
 import { CentroidTracker, BoundingBox } from '@/lib/tracker';
+import { ActionDetector, ActionEvent, ActionConfig } from '@/lib/action-detector';
 import { useCreateDetection } from '@workspace/api-client-react';
 
 const LOG_INTERVAL_MS = 5000;
-// Run segmentation every N animation frames (skip-frames are drawn with the
-// previous result so the overlay looks smooth at full 60fps display rate).
 const SEGMENT_EVERY_N = 3;
 
 export function useLiveDetection() {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef  = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [isModelLoading, setIsModelLoading] = useState(true);
-  const [modelError,    setModelError]    = useState<string | null>(null);
-  const [cameraError,   setCameraError]   = useState<string | null>(null);
-  const [isActive,      setIsActive]      = useState(false);
-  const [currentStats,  setCurrentStats]  = useState({ fps: 0, personCount: 0 });
+  const [modelError,     setModelError]     = useState<string | null>(null);
+  const [cameraError,    setCameraError]    = useState<string | null>(null);
+  const [isActive,       setIsActive]       = useState(false);
+  const [currentStats,   setCurrentStats]   = useState({ fps: 0, personCount: 0 });
+  const [actionEvents,   setActionEvents]   = useState<ActionEvent[]>([]);
 
-  // ── Refs that the RAF loop reads directly (no stale-closure issues) ────
-  const segmentorRef   = useRef<DETRDetector | null>(null);
-  const trackerRef     = useRef<CentroidTracker>(new CentroidTracker(20, 100));
-  const reqRef         = useRef<number>();
-  const isActiveRef    = useRef(false);        // mirrors isActive state for RAF
-  const lastLogRef     = useRef<number>(0);
-  const lastFpsRef     = useRef<number>(performance.now());
-  const fpsCountRef    = useRef<number>(0);
-  const rafCountRef    = useRef<number>(0);    // throttle segmentation
-  // Keep last successful segmentation so skip-frames still draw the overlay
+  const segmentorRef    = useRef<DETRDetector | null>(null);
+  const trackerRef      = useRef<CentroidTracker>(new CentroidTracker(20, 100));
+  const actionDetRef    = useRef<ActionDetector>(new ActionDetector());
+  const reqRef          = useRef<number>();
+  const isActiveRef     = useRef(false);
+  const lastLogRef      = useRef<number>(0);
+  const lastFpsRef      = useRef<number>(performance.now());
+  const fpsCountRef     = useRef<number>(0);
+  const rafCountRef     = useRef<number>(0);
+  const knownIdsRef     = useRef<Set<number>>(new Set()); // for EXITED_FRAME
+
   const lastSegsRef    = useRef<Awaited<ReturnType<DETRDetector['segment']>>>([]);
   const lastSrRef      = useRef<ReturnType<DETRDetector['extractBoxesWithIndex']>>([]);
   const lastTrackedRef = useRef<Parameters<DETRDetector['drawSegmentedOverlay']>[3]>([]);
 
   const createDetection = useCreateDetection();
 
-  // ── Camera init ─────────────────────────────────────────────────────────
+  // ── Camera ───────────────────────────────────────────────────────────────
   const initCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -54,7 +55,7 @@ export function useLiveDetection() {
     }
   };
 
-  // ── Model init ──────────────────────────────────────────────────────────
+  // ── Model ────────────────────────────────────────────────────────────────
   const initModel = async () => {
     try {
       setIsModelLoading(true);
@@ -69,23 +70,18 @@ export function useLiveDetection() {
     }
   };
 
-  // ── RAF loop — reads only from refs, never from closure state ──────────
-  // This avoids stale-closure / multiple-loop bugs that occur when useCallback
-  // re-creates processFrame on every isActive change and starts a second loop
-  // while the first is still running.
+  // ── RAF loop (all mutable state via refs — no stale closures) ────────────
   const processFrame = useCallback(async () => {
     const video    = videoRef.current;
     const canvas   = canvasRef.current;
     const detector = segmentorRef.current;
 
     if (!isActiveRef.current || !video || !canvas || !detector) {
-      // Keep polling so the loop can resume without a fresh useEffect
       if (isActiveRef.current) reqRef.current = requestAnimationFrame(processFrame);
       return;
     }
 
     if (video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-      // Only reset canvas size when dimensions actually change (resizing clears the canvas)
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width  = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -102,12 +98,25 @@ export function useLiveDetection() {
             const segResults = detector.extractBoxesWithIndex(segs);
             const tracked    = trackerRef.current.update(segResults.map(r => r.box));
 
-            // Cache for skip-frames
             lastSegsRef.current    = segs;
             lastSrRef.current      = segResults;
             lastTrackedRef.current = tracked;
 
-            // FPS counter (counts segmentation calls, not RAF ticks)
+            // ── Action detection ────────────────────────────────────────
+            const newEvents = actionDetRef.current.update(tracked, knownIdsRef.current);
+
+            // Update knownIds to current active tracks
+            const nextIds = new Set<number>();
+            for (const obj of tracked) {
+              if (obj.missedFrames === 0) nextIds.add(obj.id);
+            }
+            knownIdsRef.current = nextIds;
+
+            if (newEvents.length > 0) {
+              setActionEvents(newEvents); // parent accumulates with useEffect
+            }
+
+            // FPS
             fpsCountRef.current++;
             const now = performance.now();
             if (now - lastFpsRef.current >= 1000) {
@@ -129,13 +138,7 @@ export function useLiveDetection() {
             }
           }
 
-          // Always redraw with latest (or cached) data so the overlay is smooth
-          detector.drawSegmentedOverlay(
-            ctx,
-            lastSegsRef.current,
-            lastSrRef.current,
-            lastTrackedRef.current,
-          );
+          detector.drawSegmentedOverlay(ctx, lastSegsRef.current, lastSrRef.current, lastTrackedRef.current);
         } catch (e) {
           console.error('Inference error:', e);
         }
@@ -143,17 +146,14 @@ export function useLiveDetection() {
     }
 
     reqRef.current = requestAnimationFrame(processFrame);
-  }, []); // ← intentionally empty deps: all mutable state accessed via refs
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Keep isActiveRef in sync with isActive state ────────────────────────
+  // ── isActive → isActiveRef sync + loop control ───────────────────────────
   useEffect(() => {
     isActiveRef.current = isActive;
-    if (isActive && !segmentorRef.current) return; // wait for model
     if (isActive) {
-      // Resume: kick off the loop (it self-reschedules while isActiveRef is true)
       reqRef.current = requestAnimationFrame(processFrame);
     } else {
-      // Pause: cancel the pending RAF; the next processFrame check will bail early
       if (reqRef.current) cancelAnimationFrame(reqRef.current);
     }
   }, [isActive, processFrame]);
@@ -174,6 +174,11 @@ export function useLiveDetection() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Allow live config updates from the UI ─────────────────────────────────
+  const setActionConfigs = useCallback((configs: ActionConfig[]) => {
+    actionDetRef.current.setConfigs(configs);
+  }, []);
+
   return {
     videoRef,
     canvasRef,
@@ -183,5 +188,7 @@ export function useLiveDetection() {
     currentStats,
     isActive,
     setIsActive,
+    actionEvents,
+    setActionConfigs,
   };
 }

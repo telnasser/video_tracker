@@ -1,6 +1,7 @@
 import { useLiveDetection } from '@/hooks/use-live-detection';
 import { Camera, AlertTriangle, Play, Square, Crosshair, Users, Activity } from 'lucide-react';
 import { motion } from 'framer-motion';
+import ActionPanel from '@/components/action-panel';
 
 export default function LiveFeed() {
   const {
@@ -11,7 +12,9 @@ export default function LiveFeed() {
     cameraError,
     currentStats,
     isActive,
-    setIsActive
+    setIsActive,
+    actionEvents,
+    setActionConfigs,
   } = useLiveDetection();
 
   return (
@@ -51,8 +54,8 @@ export default function LiveFeed() {
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
         
+        {/* ── Video area ─────────────────────────────────────────────── */}
         <div className="lg:col-span-3 flex flex-col gap-4">
-          {/* Main Video Area */}
           <div className="flex-1 relative bg-black border border-border rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-primary/5 cam-corners group">
             <div className="cam-corners-inner"></div>
             
@@ -67,8 +70,7 @@ export default function LiveFeed() {
               className="absolute inset-0 w-full h-full object-cover object-center pointer-events-none"
             />
             <div className="scanlines"></div>
-            
-            {/* Overlays */}
+
             {isModelLoading && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-30">
                 <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -92,7 +94,7 @@ export default function LiveFeed() {
               </div>
             )}
 
-            {/* Crosshair Overlay */}
+            {/* Crosshair overlay */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
               <div className="w-[1px] h-full bg-primary/50"></div>
               <div className="w-full h-[1px] bg-primary/50 absolute"></div>
@@ -101,14 +103,15 @@ export default function LiveFeed() {
           </div>
         </div>
 
-        {/* Telemetry Panel */}
-        <div className="flex flex-col gap-4">
+        {/* ── Right panel ────────────────────────────────────────────── */}
+        <div className="flex flex-col gap-4 overflow-y-auto">
+
+          {/* Telemetry */}
           <div className="bg-card border border-border p-4 rounded-lg relative overflow-hidden hover-elevate">
             <h3 className="font-mono text-xs text-muted-foreground flex items-center gap-2 mb-4">
               <Crosshair className="w-4 h-4 text-primary" />
               TELEMETRY_DATA
             </h3>
-            
             <div className="space-y-6">
               <div>
                 <p className="font-mono text-[10px] text-muted-foreground mb-1">TARGETS ACQUIRED</p>
@@ -125,10 +128,10 @@ export default function LiveFeed() {
                   <span className="font-mono text-xs text-muted-foreground">HZ</span>
                 </div>
                 <div className="w-full bg-muted h-1 mt-2 rounded-full overflow-hidden">
-                  <motion.div 
+                  <motion.div
                     className="h-full bg-primary"
                     initial={{ width: 0 }}
-                    animate={{ width: `${Math.min((currentStats.fps / 60) * 100, 100)}%` }}
+                    animate={{ width: `${Math.min((currentStats.fps / 30) * 100, 100)}%` }}
                     transition={{ type: 'tween', ease: 'linear', duration: 0.5 }}
                   />
                 </div>
@@ -146,17 +149,18 @@ export default function LiveFeed() {
             </div>
           </div>
 
-          <div className="bg-card border border-border p-4 rounded-lg flex-1">
-             <h3 className="font-mono text-xs text-muted-foreground flex items-center gap-2 mb-4">
+          {/* Subject list */}
+          <div className="bg-card border border-border p-4 rounded-lg">
+            <h3 className="font-mono text-xs text-muted-foreground flex items-center gap-2 mb-4">
               <Users className="w-4 h-4 text-primary" />
               THREAT_ASSESSMENT
             </h3>
             {currentStats.personCount === 0 ? (
-              <div className="h-32 flex items-center justify-center text-muted-foreground font-mono text-xs text-center border border-dashed border-border/50 rounded">
+              <div className="h-20 flex items-center justify-center text-muted-foreground font-mono text-xs text-center border border-dashed border-border/50 rounded">
                 NO SUBJECTS<br/>DETECTED
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {Array.from({ length: currentStats.personCount }).map((_, i) => (
                   <div key={i} className="flex items-center justify-between p-2 rounded bg-secondary border border-border/50">
                     <div className="flex items-center gap-2">
@@ -169,8 +173,13 @@ export default function LiveFeed() {
               </div>
             )}
           </div>
-        </div>
 
+          {/* Action detection panel */}
+          <ActionPanel
+            events={actionEvents}
+            onConfigChange={setActionConfigs}
+          />
+        </div>
       </div>
     </div>
   );
