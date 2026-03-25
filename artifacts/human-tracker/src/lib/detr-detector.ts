@@ -55,8 +55,8 @@ export class DETRDetector {
     if (!this.net) throw new Error('BodyPix model not loaded');
     return this.net.segmentMultiPerson(source, {
       flipHorizontal: false,
-      internalResolution: 'medium',   // better accuracy than 'low'
-      segmentationThreshold: 0.65,
+      internalResolution: 'low',       // fastest inference; mask is still per-pixel
+      segmentationThreshold: 0.6,
       maxDetections: 10,
       scoreThreshold: 0.3,
       nmsRadius: 20,
