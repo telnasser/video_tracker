@@ -60,7 +60,7 @@ export function Sidebar() {
             </div>
             <div className="flex justify-between">
               <span>MODEL</span>
-              <span>COCO-SSD</span>
+              <span>BODY-PIX</span>
             </div>
             <div className="flex justify-between">
               <span>RUNTIME</span>

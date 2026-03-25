@@ -1,17 +1,16 @@
 /**
- * DETRDetector
- * Uses COCO-SSD (TF.js / WebGL) as the detection backbone — ONNX Runtime Web
- * has persistent initialisation failures in Vite 7 due to its webpack-bundled
- * CJS internals conflicting with Vite's ESM module system.
+ * DETRDetector — pixel-perfect body segmentation via BodyPix MobileNetV1.
  *
- * The visual output is identical: each detected person is rendered as a
- * proportional human body silhouette (head + torso + arms + legs) in their
- * unique track colour, with glow, motion trail, centroid crosshair, and ID label.
+ * Uses `@tensorflow-models/body-pix` (TF.js / WebGL) to produce a per-pixel
+ * binary mask for each detected person.  Every foreground pixel of the mask is
+ * painted with the person's unique track colour, giving an exact body-shape
+ * overlay rather than a generic silhouette or bounding box.
  *
- * External interface matches BodyPixSegmentor exactly, so only imports change.
+ * External interface is identical to the previous detectors so nothing in
+ * use-live-detection.ts or video-analysis.tsx needs to change.
  */
 
-import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import * as bodyPix from '@tensorflow-models/body-pix';
 import '@tensorflow/tfjs';
 
 export interface DetectionBox {
@@ -28,130 +27,71 @@ export interface SegmentResult {
   segIndex: number;
 }
 
-type CocoDetection = cocoSsd.DetectedObject;
-
 function hexToRgb(hex: string): [number, number, number] {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return m
-    ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)]
-    : [0, 255, 200];
-}
-
-/** Draw a proportional human body silhouette within the given bounding box. */
-function drawBodySilhouette(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  color: string,
-  alpha = 0.58
-) {
-  const [r, g, b] = hexToRgb(color);
-  const fill = `rgba(${r},${g},${b},${alpha})`;
-  const cx = x + w / 2;
-
-  // ── Head ────────────────────────────────────────────────────────────────
-  const headR  = w * 0.22;
-  const headCY = y + headR + h * 0.02;
-  ctx.beginPath();
-  ctx.ellipse(cx, headCY, headR * 0.85, headR, 0, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
-  ctx.fill();
-
-  // ── Torso (trapezoid: wider at shoulders, narrower at waist) ─────────
-  const shoulderY = headCY + headR;
-  const shoulderW = w * 0.72;
-  const waistW    = w * 0.45;
-  const torsoH    = h * 0.35;
-  ctx.beginPath();
-  ctx.moveTo(cx - shoulderW / 2, shoulderY);
-  ctx.lineTo(cx + shoulderW / 2, shoulderY);
-  ctx.lineTo(cx + waistW / 2,    shoulderY + torsoH);
-  ctx.lineTo(cx - waistW / 2,    shoulderY + torsoH);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-
-  // ── Arms ─────────────────────────────────────────────────────────────
-  const armW = w * 0.13;
-  const armH = torsoH * 0.85;
-  const armY = shoulderY + h * 0.02;
-  const armR = armW / 2;
-  // left
-  ctx.beginPath();
-  ctx.roundRect(cx - shoulderW / 2 - armW + w * 0.02, armY, armW, armH, armR);
-  ctx.fillStyle = fill; ctx.fill();
-  // right
-  ctx.beginPath();
-  ctx.roundRect(cx + shoulderW / 2 - w * 0.02, armY, armW, armH, armR);
-  ctx.fillStyle = fill; ctx.fill();
-
-  // ── Hips connector ───────────────────────────────────────────────────
-  const legTopY = shoulderY + torsoH;
-  const hipW    = w * 0.55;
-  ctx.beginPath();
-  ctx.moveTo(cx - waistW / 2, legTopY);
-  ctx.lineTo(cx + waistW / 2, legTopY);
-  ctx.lineTo(cx + hipW  / 2,  legTopY + h * 0.06);
-  ctx.lineTo(cx - hipW  / 2,  legTopY + h * 0.06);
-  ctx.closePath();
-  ctx.fillStyle = fill; ctx.fill();
-
-  // ── Legs ─────────────────────────────────────────────────────────────
-  const legW   = w * 0.22;
-  const legTopActual = legTopY + h * 0.05;
-  const legBot = y + h;
-  const legH   = legBot - legTopActual;
-  const legR   = legW / 2;
-  // left
-  ctx.beginPath();
-  ctx.roundRect(cx - hipW / 2,         legTopActual, legW, legH, legR);
-  ctx.fillStyle = fill; ctx.fill();
-  // right
-  ctx.beginPath();
-  ctx.roundRect(cx + hipW / 2 - legW,  legTopActual, legW, legH, legR);
-  ctx.fillStyle = fill; ctx.fill();
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 255, 200];
 }
 
 export class DETRDetector {
-  private model: cocoSsd.ObjectDetection | null = null;
+  private net: bodyPix.BodyPix | null = null;
 
   async load() {
-    this.model = await cocoSsd.load({ base: 'mobilenet_v2' });
+    this.net = await bodyPix.load({
+      architecture: 'MobileNetV1',
+      outputStride: 16,
+      multiplier: 0.75,
+      quantBytes: 2,
+    });
   }
 
   isLoaded() {
-    return this.model !== null;
+    return this.net !== null;
   }
 
-  /** Detect persons in a video/canvas frame. */
+  /** Segment every person in the current frame; returns one mask per person. */
   async segment(
     source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
-  ): Promise<CocoDetection[]> {
-    if (!this.model) throw new Error('COCO-SSD model not loaded');
-    const detections = await this.model.detect(source as HTMLImageElement);
-    return detections.filter((d) => d.class === 'person' && d.score > 0.45);
+  ): Promise<bodyPix.PersonSegmentation[]> {
+    if (!this.net) throw new Error('BodyPix model not loaded');
+    return this.net.segmentMultiPerson(source, {
+      flipHorizontal: false,
+      internalResolution: 'medium',   // better accuracy than 'low'
+      segmentationThreshold: 0.65,
+      maxDetections: 10,
+      scoreThreshold: 0.3,
+      nmsRadius: 20,
+    });
   }
 
-  /** Convert COCO-SSD bounding boxes → SegmentResult for the centroid tracker. */
-  extractBoxesWithIndex(detections: CocoDetection[]): SegmentResult[] {
-    return detections.map((d, si) => ({
-      segIndex: si,
-      box: {
-        x: d.bbox[0],
-        y: d.bbox[1],
-        width: d.bbox[2],
-        height: d.bbox[3],
-        confidence: d.score,
-        trackId: 0,
-      },
-    }));
+  /** Derive axis-aligned bounding boxes from pixel masks for the centroid tracker. */
+  extractBoxesWithIndex(segs: bodyPix.PersonSegmentation[]): SegmentResult[] {
+    const results: SegmentResult[] = [];
+    for (let si = 0; si < segs.length; si++) {
+      const seg = segs[si];
+      let minX = seg.width, minY = seg.height, maxX = 0, maxY = 0, found = false;
+      for (let i = 0; i < seg.data.length; i++) {
+        if (seg.data[i] === 1) {
+          found = true;
+          const px = i % seg.width;
+          const py = Math.floor(i / seg.width);
+          if (px < minX) minX = px;
+          if (px > maxX) maxX = px;
+          if (py < minY) minY = py;
+          if (py > maxY) maxY = py;
+        }
+      }
+      if (!found) continue;
+      results.push({
+        segIndex: si,
+        box: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, confidence: 0.9, trackId: 0 },
+      });
+    }
+    return results;
   }
 
   drawSegmentedOverlay(
     ctx: CanvasRenderingContext2D,
-    detections: CocoDetection[],
+    segs: bodyPix.PersonSegmentation[],
     segResults: SegmentResult[],
     trackedObjects: Array<{
       id: number;
@@ -161,91 +101,147 @@ export class DETRDetector {
       color: string;
     }>
   ) {
-    const cw = ctx.canvas.width;
-    const ch = ctx.canvas.height;
-    ctx.clearRect(0, 0, cw, ch);
+    const { width, height } = ctx.canvas;
+    ctx.clearRect(0, 0, width, height);
 
-    // ── Match tracked objects → nearest segmentation ──────────────────────
+    // ── Match each visible tracked object to its nearest segmentation ────
     const usedSegs = new Set<number>();
-    const assignments: Array<{ obj: typeof trackedObjects[0]; segResult: SegmentResult }> = [];
+    const assignments: Array<{ obj: typeof trackedObjects[0]; segIndex: number }> = [];
 
     for (const obj of trackedObjects) {
       if (obj.missedFrames > 0) continue;
       const ox = obj.box.x + obj.box.width / 2;
       const oy = obj.box.y + obj.box.height / 2;
-      let bestIdx = -1, bestDist = Infinity;
-      for (const sr of segResults) {
-        if (usedSegs.has(sr.segIndex)) continue;
-        const d = Math.hypot(ox - (sr.box.x + sr.box.width / 2), oy - (sr.box.y + sr.box.height / 2));
-        if (d < bestDist) { bestDist = d; bestIdx = sr.segIndex; }
+      let bestSeg = -1, bestDist = Infinity;
+      for (const { box, segIndex } of segResults) {
+        if (usedSegs.has(segIndex)) continue;
+        const d = Math.hypot(ox - (box.x + box.width / 2), oy - (box.y + box.height / 2));
+        if (d < bestDist) { bestDist = d; bestSeg = segIndex; }
       }
-      if (bestIdx >= 0) {
-        usedSegs.add(bestIdx);
-        assignments.push({ obj, segResult: segResults[bestIdx] });
-      }
+      if (bestSeg >= 0) { usedSegs.add(bestSeg); assignments.push({ obj, segIndex: bestSeg }); }
     }
 
-    // ── Layer 1: filled body silhouettes with glow ───────────────────────
-    for (const { obj, segResult: { box } } of assignments) {
+    // ── Layer 1: pixel-perfect filled mask ───────────────────────────────
+    // Walk every pixel of each person's binary mask and paint it with their
+    // unique colour at ~67 % opacity — exact body shape, no approximation.
+    if (assignments.length > 0) {
+      const imageData = ctx.createImageData(width, height);
+
+      for (const { obj, segIndex } of assignments) {
+        const seg = segs[segIndex];
+        const [r, g, b] = hexToRgb(obj.color);
+
+        // BodyPix mask may be at a lower resolution than the canvas; scale.
+        const scaleX = width  / seg.width;
+        const scaleY = height / seg.height;
+        const needsScale = scaleX !== 1 || scaleY !== 1;
+
+        if (needsScale) {
+          for (let my = 0; my < seg.height; my++) {
+            for (let mx = 0; mx < seg.width; mx++) {
+              if (seg.data[my * seg.width + mx] !== 1) continue;
+              const cx = Math.round(mx * scaleX);
+              const cy = Math.round(my * scaleY);
+              if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+              const pidx = (cy * width + cx) * 4;
+              imageData.data[pidx]     = r;
+              imageData.data[pidx + 1] = g;
+              imageData.data[pidx + 2] = b;
+              imageData.data[pidx + 3] = 172;
+            }
+          }
+        } else {
+          for (let i = 0; i < seg.data.length; i++) {
+            if (seg.data[i] !== 1) continue;
+            const pidx = i * 4;
+            imageData.data[pidx]     = r;
+            imageData.data[pidx + 1] = g;
+            imageData.data[pidx + 2] = b;
+            imageData.data[pidx + 3] = 172;
+          }
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    // ── Layer 2: edge glow — redraw the mask with heavy blur for a rim effect
+    if (assignments.length > 0) {
       ctx.save();
-      ctx.shadowColor = obj.color;
-      ctx.shadowBlur = 22;
-      drawBodySilhouette(ctx, box.x, box.y, box.width, box.height, obj.color, 0.62);
+      for (const { obj, segIndex } of assignments) {
+        const seg = segs[segIndex];
+        const scaleX = width  / seg.width;
+        const scaleY = height / seg.height;
+
+        ctx.shadowColor = obj.color;
+        ctx.shadowBlur  = 18;
+        ctx.fillStyle   = obj.color + '00'; // transparent fill; only the shadow shows
+
+        // Trace edge pixels (where mask transitions 0→1) to build the glow outline
+        ctx.beginPath();
+        for (let my = 1; my < seg.height - 1; my++) {
+          for (let mx = 1; mx < seg.width - 1; mx++) {
+            if (seg.data[my * seg.width + mx] !== 1) continue;
+            // Is this pixel on the boundary?
+            const right = seg.data[my * seg.width + mx + 1];
+            const below = seg.data[(my + 1) * seg.width + mx];
+            if (right === 0 || below === 0) {
+              ctx.rect(
+                Math.round(mx * scaleX),
+                Math.round(my * scaleY),
+                Math.max(1, Math.round(scaleX)),
+                Math.max(1, Math.round(scaleY))
+              );
+            }
+          }
+        }
+        ctx.fill();
+      }
       ctx.restore();
     }
 
-    // ── Layer 2: edge glow (second pass, more diffuse) ────────────────────
-    for (const { obj, segResult: { box } } of assignments) {
-      ctx.save();
-      ctx.shadowColor = obj.color;
-      ctx.shadowBlur = 40;
-      ctx.globalAlpha = 0.3;
-      drawBodySilhouette(ctx, box.x, box.y, box.width, box.height, obj.color, 0);
-      ctx.restore();
-    }
-
-    // ── Layer 3: motion trails ────────────────────────────────────────────
+    // ── Layer 3: motion trails ───────────────────────────────────────────
     for (const obj of trackedObjects) {
       const { color, history } = obj;
       if (history.length < 2) continue;
       ctx.beginPath();
       ctx.strokeStyle = color + 'aa';
-      ctx.lineWidth = 2.5;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      ctx.lineWidth   = 2.5;
+      ctx.lineCap     = 'round';
+      ctx.lineJoin    = 'round';
       ctx.moveTo(history[0].x, history[0].y);
       for (let i = 1; i < history.length; i++) ctx.lineTo(history[i].x, history[i].y);
       ctx.stroke();
     }
 
-    // ── Layer 4: centroid crosshair + ID label ────────────────────────────
+    // ── Layer 4: centroid crosshair + ID label ───────────────────────────
     for (const obj of trackedObjects) {
       if (obj.missedFrames > 0) continue;
       const { color, box, id } = obj;
-      const cx2 = box.x + box.width / 2;
-      const cy2 = box.y + box.height / 2;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
 
       ctx.save();
       ctx.shadowColor = color;
-      ctx.shadowBlur = 6;
+      ctx.shadowBlur  = 6;
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth   = 2;
       ctx.beginPath();
-      ctx.arc(cx2, cy2, 9, 0, Math.PI * 2);
-      ctx.moveTo(cx2 - 16, cy2); ctx.lineTo(cx2 + 16, cy2);
-      ctx.moveTo(cx2, cy2 - 16); ctx.lineTo(cx2, cy2 + 16);
+      ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+      ctx.moveTo(cx - 16, cy); ctx.lineTo(cx + 16, cy);
+      ctx.moveTo(cx, cy - 16); ctx.lineTo(cx, cy + 16);
       ctx.stroke();
       ctx.restore();
 
       const label = `ID:${id}`;
       ctx.font = 'bold 13px "Share Tech Mono", monospace';
       const tw = ctx.measureText(label).width;
-      const lx = cx2 - tw / 2 - 4;
+      const lx = cx - tw / 2 - 4;
       const ly = box.y - 24;
       ctx.save();
       ctx.shadowColor = color;
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = color + 'ee';
+      ctx.shadowBlur  = 8;
+      ctx.fillStyle   = color + 'ee';
       ctx.fillRect(lx, ly, tw + 8, 19);
       ctx.restore();
       ctx.fillStyle = '#000';
