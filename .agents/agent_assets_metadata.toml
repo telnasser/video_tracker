@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "A62hgHsupH3a9HjhykMVs"
+uri = "file://AEGIS_DOCUMENTATION.md"
+type = "text"
+title = "AEGIS — Technical Documentation"
